@@ -8,6 +8,8 @@ from org.jboss.seam import Component
 from org.jboss.seam.security import Identity
 from org.xdi.model.custom.script.type.auth import PersonAuthenticationType
 from org.xdi.oxauth.service import UserService, AuthenticationService, AppInitializer
+from org.xdi.oxauth.service import MetricService
+from org.xdi.model.metric import MetricType
 from org.xdi.util import StringHelper
 from org.xdi.util import ArrayHelper
 from org.xdi.model.ldap import GluuLdapConfiguration
@@ -80,30 +82,38 @@ class PersonAuthentication(PersonAuthenticationType):
             print "Basic (multi auth conf). Authenticate for step 1"
 
             credentials = Identity.instance().getCredentials()
-            keyValue = credentials.getUsername()
-            userPassword = credentials.getPassword()
-
-            if (StringHelper.isNotEmptyString(keyValue) and StringHelper.isNotEmptyString(userPassword)):
-                authenticationService = Component.getInstance(AuthenticationService)
-
-                for ldapExtendedEntryManager in self.ldapExtendedEntryManagers:
-                    ldapConfiguration = ldapExtendedEntryManager["ldapConfiguration"]
-                    ldapEntryManager = ldapExtendedEntryManager["ldapEntryManager"]
-                    loginAttributes = ldapExtendedEntryManager["loginAttributes"]
-                    localLoginAttributes = ldapExtendedEntryManager["localLoginAttributes"]
-
-                    print "Basic (multi auth conf). Authenticate for step 1. Using configuration: " + ldapConfiguration.getConfigId()
-
-                    idx = 0;
-                    count = len(loginAttributes)
-                    while (idx < count):
-                        primaryKey = loginAttributes[idx]
-                        localPrimaryKey = localLoginAttributes[idx]
-
-                        loggedIn = authenticationService.authenticate(ldapConfiguration, ldapEntryManager, keyValue, userPassword, primaryKey, localPrimaryKey)
-                        if (loggedIn):
-                            return True
-                        idx += 1
+            metricService = Component.getInstance(MetricService)
+            timerContext = metricService.getTimer(MetricType.OXAUTH_USER_AUTHENTICATION_RATE).time()
+            try:
+                keyValue = credentials.getUsername()
+                userPassword = credentials.getPassword()
+    
+                if (StringHelper.isNotEmptyString(keyValue) and StringHelper.isNotEmptyString(userPassword)):
+                    authenticationService = Component.getInstance(AuthenticationService)
+    
+                    for ldapExtendedEntryManager in self.ldapExtendedEntryManagers:
+                        ldapConfiguration = ldapExtendedEntryManager["ldapConfiguration"]
+                        ldapEntryManager = ldapExtendedEntryManager["ldapEntryManager"]
+                        loginAttributes = ldapExtendedEntryManager["loginAttributes"]
+                        localLoginAttributes = ldapExtendedEntryManager["localLoginAttributes"]
+    
+                        print "Basic (multi auth conf). Authenticate for step 1. Using configuration: " + ldapConfiguration.getConfigId()
+    
+                        idx = 0;
+                        count = len(loginAttributes)
+                        while (idx < count):
+                            primaryKey = loginAttributes[idx]
+                            localPrimaryKey = localLoginAttributes[idx]
+    
+                            loggedIn = authenticationService.authenticate(ldapConfiguration, ldapEntryManager, keyValue, userPassword, primaryKey, localPrimaryKey)
+                            if (loggedIn):
+                                metricService.incCounter(MetricType.OXAUTH_USER_AUTHENTICATION_SUCCESS)
+                                return True
+                            idx += 1
+            finally:
+                timerContext.stop()
+                
+            metricService.incCounter(MetricType.OXAUTH_USER_AUTHENTICATION_FAILURES)
 
             return False
         else:
@@ -205,7 +215,7 @@ class PersonAuthentication(PersonAuthenticationType):
 
         ldapExtendedEntryManagers = []
         for ldapExtendedConfiguration in ldapExtendedConfigurations:
-            ldapEntryManager = appInitializer.createLdapAuthEntryManager(ldapExtendedConfiguration["ldapConfiguration"]);
+            ldapEntryManager = appInitializer.createLdapAuthEntryManager(ldapExtendedConfiguration["ldapConfiguration"])
             ldapExtendedEntryManagers.append({ "ldapConfiguration" : ldapExtendedConfiguration["ldapConfiguration"], "loginAttributes" : ldapExtendedConfiguration["loginAttributes"], "localLoginAttributes" : ldapExtendedConfiguration["localLoginAttributes"], "ldapEntryManager" : ldapEntryManager })
         
         return ldapExtendedEntryManagers
